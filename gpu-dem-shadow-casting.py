@@ -5,21 +5,21 @@ from math import sqrt
 
 
 @cuda.jit("float32[:, :], float32[:, :], int64, int64, int64, float64, float64, float64")
-def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azim, incl):
+def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azimu, incli):
     """
     This is the CUDA kernel. Result is written into first argument.
     """
     i, j = cuda.grid(2)
     if i < ys and j < xs:
         b = i - slope * j
-        aazim = abs(azim)
+        aazim = abs(azimu)
         klen = 0
         slen = 0
         k = 0
         o = 0
         if 45 <= aazim and aazim <= 135:
             # steep steps, each row one pixel
-            if 0 <= azim:
+            if 0 <= azimu:
                 for y in range(i, ys):
                     x = int((y - b) / slope)
                     if xs <= x:
@@ -28,7 +28,7 @@ def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azim, incl):
                         break
                     dy, dx = y - i, x - j
                     r = sqrt(dx*dx + dy*dy)
-                    dz = z[y, x] - z[i, j] - r * incl
+                    dz = z[y, x] - z[i, j] - r * incli
                     if dz > 0:
                         if k == o + 1:
                             klen += 1
@@ -49,7 +49,7 @@ def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azim, incl):
                         break
                     dy, dx = y - i, x - j
                     r = sqrt(dx*dx + dy*dy)
-                    dz = z[y, x] - z[i, j] - r * incl
+                    dz = z[y, x] - z[i, j] - r * incli
                     if dz > 0:
                         if k == o + 1:
                             klen += 1
@@ -63,7 +63,7 @@ def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azim, incl):
                     k += 1
         else:
             # shallow steps, each col one pixel
-            if abs(azim) <= 90:
+            if abs(azimu) <= 90:
                 for x in range(j, xs):
                     y = int(slope * x + b)
                     if ys <= y:
@@ -72,7 +72,7 @@ def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azim, incl):
                         break
                     dy, dx = y - i, x - j
                     r = sqrt(dx*dx + dy*dy)
-                    dz = z[y, x] - z[i, j] - r * incl
+                    dz = z[y, x] - z[i, j] - r * incli
                     if dz > 0:
                         if k == o + 1:
                             klen += 1
@@ -93,7 +93,7 @@ def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azim, incl):
                         break
                     dy, dx = y - i, x - j
                     r = sqrt(dx*dx + dy*dy)
-                    dz = z[y, x] - z[i, j] - r * incl
+                    dz = z[y, x] - z[i, j] - r * incli
                     if dz > 0:
                         if k == o + 1:
                             klen += 1
@@ -109,15 +109,20 @@ def cuda_kern_cast_shadow(s, z, ys, xs, thr, slope, azim, incl):
             s[i, j] = 1
 
 
-def cast_shadow(z, azimuth, inclination):
+def cast_shadow(z, pixel_size, azimuth, inclination):
     """
-    This is the CUDA kernel wrapper. First argument is the height image (raster).
-    Second argument is the direction of the sun in degrees (-180, 180).
-    Third argument is the sun height in degrees (0, 90) with 0 being nadir.
+    This is the CUDA kernel wrapper. First argument (z) is the height
+    image (raster). Second argument (pixel_size) is the pixel size of
+    the height image. Both need to have the same units (e.g., meters).
+    Third argument (azimuth) is the direction of the sun in degrees
+    (-180, 180). Zero degrees correspond to the sun coming from East,
+    -90° corresponds to South. Fourth argument (inclination) is the
+    sun angle away from the vertical polar axis in degrees (0, 90)
+    with 0° being directly at the zenith.
     """
-    thr = 5 # minimum light blocking thickness
+    thr = 4 # minimum light blocking thickness
     assert inclination < 90
-    incli = np.tan((90 - inclination) * np.pi / 180)
+    incli = np.tan((90 - inclination) * np.pi / 180) * pixel_size
     slope = np.tan(azimuth * np.pi / 180)
     ys, xs = z.shape
     d_z = cuda.to_device(z.astype("float32"))
@@ -163,6 +168,6 @@ if __name__ == "__main__":
 
     azimuth = 120
     inclination = 60
-    shadow_image = cast_shadow(height_image, azimuth, inclination)
+    shadow_image = cast_shadow(height_image, xb[1]-xb[0], azimuth, inclination)
     np.save("height_image.npy", height_image)
     np.save("shadow_image.npy", shadow_image)
